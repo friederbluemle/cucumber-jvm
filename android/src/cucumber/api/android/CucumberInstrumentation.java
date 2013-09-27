@@ -37,6 +37,7 @@ public class CucumberInstrumentation extends Instrumentation {
     public static final int REPORT_VALUE_RESULT_ERROR = -1;
     public static final int REPORT_VALUE_RESULT_FAILURE = -2;
     public static final String REPORT_KEY_STACK = "stack";
+    public static final String OPTION_VALUE_SEPARATOR = "--";
     public static final String TAG = "cucumber-android";
     private RuntimeOptions runtimeOptions;
     private ResourceLoader resourceLoader;
@@ -60,12 +61,19 @@ public class CucumberInstrumentation extends Instrumentation {
         for (Class<?> clazz : classFinder.getDescendants(Object.class, context.getPackageName())) {
             if (clazz.isAnnotationPresent(CucumberOptions.class)) {
                 Log.d(TAG, "Found CucumberOptions in class " + clazz.getName());
+                Log.d(TAG, clazz.getAnnotations()[0].toString());
                 optionsAnnotatedClass = clazz;
                 break; // We assume there is only one CucumberOptions annotated class.
             }
         }
         if (optionsAnnotatedClass == null) {
             throw new CucumberException("No CucumberOptions annotation");
+        }
+
+        String cucumberOptions = getCucumberOptionsString(arguments);
+        if (!cucumberOptions.isEmpty()) {
+            Log.d(TAG, "Setting cucumber.options from arguments: '" + cucumberOptions + "'");
+            System.setProperty("cucumber.options", cucumberOptions);
         }
 
         @SuppressWarnings("unchecked")
@@ -88,6 +96,11 @@ public class CucumberInstrumentation extends Instrumentation {
         } catch (IOException e) {
             throw new CucumberException("Failed to open " + apkPath);
         }
+    }
+
+    private boolean getBooleanArgument(Bundle arguments, String tag) {
+        String tagString = arguments.getString(tag);
+        return tagString != null && Boolean.parseBoolean(tagString);
     }
 
     @Override
@@ -139,6 +152,71 @@ public class CucumberInstrumentation extends Instrumentation {
         for (String s : runtime.getSnippets()) {
             Log.w(TAG, s);
         }
+    }
+
+    private void appendOption(StringBuilder sb, String optionKey, String optionValue) {
+        for (String value : optionValue.split(OPTION_VALUE_SEPARATOR)) {
+            sb.append(sb.length() == 0 || optionKey.isEmpty() ? "" : " ").append(optionKey).append(optionValue.isEmpty() ? "" : " " + value);
+        }
+    }
+
+    /**
+     * Returns a cucumber-jvm compatible command line argument string based on
+     * the argument extras found in the passed {@link Bundle}.
+     * <p />
+     * The bundle <em>cannot</em> contain multiple entries for the same key,
+     * however cucumber supports options that can be passed multiple times (e.g.
+     * {@code --tags}). The solution is to pass values separated by
+     * {@link CucumberInstrumentation#OPTION_VALUE_SEPARATOR} which will result
+     * in multiple {@code --key value} pairs being created.
+     * <p />
+     * Note: This method should be updated whenever new options are added. See
+     * {@link RuntimeOptions} and {@link CucumberOptions}.
+     *
+     * @param arguments
+     *            the arguments bundle to extract the options from
+     * @return the cucumber options string
+     */
+    private String getCucumberOptionsString(Bundle arguments) {
+        StringBuilder cucumberOptions = new StringBuilder();
+        if (arguments != null) {
+            String features = "";
+            for (String key : arguments.keySet()) {
+                if ("glue".equals(key)) {
+                    appendOption(cucumberOptions, "--glue", arguments.getString(key));
+                } else if ("format".equals(key)) {
+                    appendOption(cucumberOptions, "--format", arguments.getString(key));
+                } else if ("tags".equals(key)) {
+                    appendOption(cucumberOptions, "--tags", arguments.getString(key));
+                } else if ("name".equals(key)) {
+                    appendOption(cucumberOptions, "--name", arguments.getString(key));
+                } else if ("dryRun".equals(key) && getBooleanArgument(arguments, key)) {
+                    appendOption(cucumberOptions, "--dry-run", "");
+                } else if ("noDryRun".equals(key) && getBooleanArgument(arguments, key)) {
+                    appendOption(cucumberOptions, "--no-dry-run", "");
+                } else if ("monochrome".equals(key) && getBooleanArgument(arguments, key)) {
+                    appendOption(cucumberOptions, "--monochrome", "");
+                } else if ("noMonochrome".equals(key) && getBooleanArgument(arguments, key)) {
+                    appendOption(cucumberOptions, "--no-monochrome", "");
+                } else if ("strict".equals(key) && getBooleanArgument(arguments, key)) {
+                    appendOption(cucumberOptions, "--strict", "");
+                } else if ("noStrict".equals(key) && getBooleanArgument(arguments, key)) {
+                    appendOption(cucumberOptions, "--no-strict", "");
+                } else if ("snippets".equals(key)) {
+                    appendOption(cucumberOptions, "--snippets", arguments.getString(key));
+                } else if ("dotcucumber".equals(key)) {
+                    appendOption(cucumberOptions, "--dotcucumber", arguments.getString(key));
+                } else if ("features".equals(key)) {
+                    features = arguments.getString(key);
+                } else {
+                    Log.w(TAG, "Unrecognized option: " + key + "=" + arguments.getString(key));
+                }
+            }
+            // Even though not strictly required, wait until everything else
+            // has been added before adding any feature references
+            appendOption(cucumberOptions, "", features);
+        }
+        return cucumberOptions.toString();
     }
 
     /**

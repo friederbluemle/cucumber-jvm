@@ -115,15 +115,14 @@ public class CucumberInstrumentation extends Instrumentation {
             }
         }
 
-        AndroidReporter reporter = new AndroidReporter(numScenarios);
-        runtimeOptions.getFormatters().clear();
-        runtimeOptions.getFormatters().add(reporter);
+        AndroidReporter androidReporter = new AndroidReporter(numScenarios, new AndroidFormatter(TAG));
+        runtimeOptions.getFormatters().add(androidReporter);
 
+        Formatter formatter = runtimeOptions.formatter(classLoader);
+        Reporter reporter = runtimeOptions.reporter(classLoader);
         for (CucumberFeature cucumberFeature : cucumberFeatures) {
-            Formatter formatter = runtimeOptions.formatter(classLoader);
             cucumberFeature.run(formatter, reporter, runtime);
         }
-        Formatter formatter = runtimeOptions.formatter(classLoader);
 
         formatter.done();
         printSummary();
@@ -146,7 +145,7 @@ public class CucumberInstrumentation extends Instrumentation {
      * It also wraps the AndroidFormatter to intercept important callbacks.
      */
     private class AndroidReporter implements Formatter, Reporter {
-        private final AndroidFormatter formatter;
+        private final Formatter formatter;
         private final Bundle resultTemplate;
         private Bundle testResult;
         private int scenarioCounter;
@@ -154,8 +153,8 @@ public class CucumberInstrumentation extends Instrumentation {
         private Feature currentFeature;
         private Step currentStep;
 
-        public AndroidReporter(int numTests) {
-            formatter = new AndroidFormatter(TAG);
+        public AndroidReporter(int numTests, Formatter formatter) {
+            this.formatter = formatter;
             resultTemplate = new Bundle();
             resultTemplate.putString(Instrumentation.REPORT_KEY_IDENTIFIER, REPORT_VALUE_ID);
             resultTemplate.putInt(REPORT_KEY_NUM_TOTAL, numTests);

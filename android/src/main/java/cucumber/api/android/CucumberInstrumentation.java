@@ -32,18 +32,26 @@ import java.util.ArrayList;
 import java.util.List;
 
 public class CucumberInstrumentation extends Instrumentation {
+    public static final String REPORT_VALUE_ID = "CucumberInstrumentation";
+    public static final String REPORT_KEY_NUM_TOTAL = "numtests";
     public static final String TAG = "cucumber-android";
+
+    private final Bundle results = new Bundle();
+    private boolean justCount;
+    private int testCount;
+
     private RuntimeOptions runtimeOptions;
     private ResourceLoader resourceLoader;
     private ClassLoader classLoader;
     private Runtime runtime;
+    private List<CucumberFeature> cucumberFeatures;
 
     @Override
     public void onCreate(Bundle arguments) {
         super.onCreate(arguments);
 
-        if (arguments == null) {
-            throw new CucumberException("No arguments");
+        if (arguments != null) {
+            justCount = getBooleanArgument(arguments, "count");
         }
         Context context = getContext();
         classLoader = context.getClassLoader();
@@ -73,6 +81,8 @@ public class CucumberInstrumentation extends Instrumentation {
         AndroidObjectFactory objectFactory = new AndroidObjectFactory(delegateObjectFactory, this);
         backends.add(new JavaBackend(objectFactory, classFinder));
         runtime = new Runtime(resourceLoader, classLoader, backends, runtimeOptions);
+        cucumberFeatures = runtimeOptions.cucumberFeatures(resourceLoader);
+        testCount = TestCaseCounter.countTestCasesOf(cucumberFeatures);
 
         start();
     }
@@ -89,25 +99,33 @@ public class CucumberInstrumentation extends Instrumentation {
     public void onStart() {
         Looper.prepare();
 
-        final List<CucumberFeature> cucumberFeatures = runtimeOptions.cucumberFeatures(resourceLoader);
-        final int numberOfTests = TestCaseCounter.countTestCasesOf(cucumberFeatures);
+        if (justCount) {
+            results.putString(Instrumentation.REPORT_KEY_IDENTIFIER, REPORT_VALUE_ID);
+            results.putInt(REPORT_KEY_NUM_TOTAL, testCount);
+            finish(Activity.RESULT_OK, results);
+        } else {
+            runtimeOptions.getFormatters().add(new AndroidInstrumentationReporter(runtime, this, testCount));
+            runtimeOptions.getFormatters().add(new AndroidLogcatReporter(TAG));
 
-        runtimeOptions.getFormatters().add(new AndroidInstrumentationReporter(runtime, this, numberOfTests));
-        runtimeOptions.getFormatters().add(new AndroidLogcatReporter(TAG));
+            final Reporter reporter = runtimeOptions.reporter(classLoader);
+            final Formatter formatter = runtimeOptions.formatter(classLoader);
 
-        final Reporter reporter = runtimeOptions.reporter(classLoader);
-        final Formatter formatter = runtimeOptions.formatter(classLoader);
+            for (final CucumberFeature cucumberFeature : cucumberFeatures) {
+                cucumberFeature.run(formatter, reporter, runtime);
+            }
 
-        for (final CucumberFeature cucumberFeature : cucumberFeatures) {
-            cucumberFeature.run(formatter, reporter, runtime);
+            formatter.done();
+            formatter.close();
+
+            printSummary();
+
+            finish(Activity.RESULT_OK, results);
         }
+    }
 
-        formatter.done();
-        formatter.close();
-
-        printSummary();
-
-        finish(Activity.RESULT_OK, new Bundle());
+    private boolean getBooleanArgument(Bundle arguments, String tag) {
+        String tagString = arguments.getString(tag);
+        return tagString != null && Boolean.parseBoolean(tagString);
     }
 
     private void printSummary() {

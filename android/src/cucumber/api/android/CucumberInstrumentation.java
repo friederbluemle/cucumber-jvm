@@ -95,25 +95,7 @@ public class CucumberInstrumentation extends Instrumentation {
         Looper.prepare();
 
         List<CucumberFeature> cucumberFeatures = runtimeOptions.cucumberFeatures(resourceLoader);
-        int numScenarios = 0;
-
-        // How many individual scenarios (test cases) exist - is there a better way to do this?
-        // This is only relevant for reporting back to the Instrumentation and does not affect
-        // execution.
-        for (CucumberFeature feature : cucumberFeatures) {
-            for (CucumberTagStatement statement : feature.getFeatureElements()) {
-                if (statement instanceof CucumberScenario) {
-                    numScenarios++;
-                } else if (statement instanceof CucumberScenarioOutline) {
-                    for (CucumberExamples examples : ((CucumberScenarioOutline) statement).getCucumberExamplesList()) {
-                        for (ExamplesTableRow row : examples.getExamples().getRows()) {
-                            numScenarios++;
-                        }
-                    }
-                    numScenarios--; // subtract table header
-                }
-            }
-        }
+        int numScenarios = countScenarios(cucumberFeatures);
 
         AndroidReporter reporter = new AndroidReporter(numScenarios);
         runtimeOptions.getFormatters().clear();
@@ -139,6 +121,30 @@ public class CucumberInstrumentation extends Instrumentation {
         for (String s : runtime.getSnippets()) {
             Log.w(TAG, s);
         }
+    }
+
+    private int countScenarios(List<CucumberFeature> cucumberFeatures) {
+        int numScenarios = 0;
+
+        // How many individual scenarios (test cases) exist - is there a better way to do this?
+        // This is only relevant for reporting back to the Instrumentation and does not affect
+        // execution.
+        for (CucumberFeature feature : cucumberFeatures) {
+            for (CucumberTagStatement statement : feature.getFeatureElements()) {
+                if (statement instanceof CucumberScenario) {
+                    numScenarios++;
+                } else if (statement instanceof CucumberScenarioOutline) {
+                    for (CucumberExamples examples : ((CucumberScenarioOutline) statement).getCucumberExamplesList()) {
+                        for (ExamplesTableRow row : examples.getExamples().getRows()) {
+                            numScenarios++;
+                        }
+                    }
+                    numScenarios--; // subtract table header
+                }
+            }
+        }
+
+        return numScenarios;
     }
 
     /**

@@ -4,6 +4,7 @@ import android.app.Activity;
 import android.app.Instrumentation;
 import android.content.Context;
 import android.os.Bundle;
+import android.os.Debug;
 import android.os.Looper;
 import android.util.Log;
 import cucumber.api.CucumberOptions;
@@ -23,7 +24,10 @@ import gherkin.formatter.Formatter;
 import gherkin.formatter.Reporter;
 import gherkin.formatter.model.*;
 
+import java.io.File;
 import java.io.IOException;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -33,23 +37,51 @@ public class CucumberInstrumentation extends Instrumentation {
     public static final String REPORT_KEY_NUM_CURRENT = "current";
     public static final String REPORT_KEY_NAME_CLASS = "class";
     public static final String REPORT_KEY_NAME_TEST = "test";
+    private static final String REPORT_KEY_COVERAGE_PATH = "coverageFilePath";
     public static final int REPORT_VALUE_RESULT_START = 1;
     public static final int REPORT_VALUE_RESULT_ERROR = -1;
     public static final int REPORT_VALUE_RESULT_FAILURE = -2;
     public static final String REPORT_KEY_STACK = "stack";
     public static final String OPTION_VALUE_SEPARATOR = "--";
+    private static final String DEFAULT_COVERAGE_FILE_NAME = "coverage.ec";
+    public static final int DEFAULT_DEBUGGER_TIMEOUT = 10000;
     public static final String TAG = "cucumber-android";
+
+    private final Bundle results = new Bundle();
+    private int debuggerTimeout;
+    private boolean justCount;
+    private int testCount;
+    private boolean coverage;
+    private String coverageFilePath;
+
     private RuntimeOptions runtimeOptions;
     private ResourceLoader resourceLoader;
     private ClassLoader classLoader;
     private Runtime runtime;
+    private List<CucumberFeature> cucumberFeatures;
 
     @Override
     public void onCreate(Bundle arguments) {
         super.onCreate(arguments);
 
-        if (arguments == null) {
-            throw new CucumberException("No arguments");
+        if (arguments != null) {
+            String debug = arguments.getString("debug");
+            if (debug != null) {
+                try {
+                    debuggerTimeout = Integer.parseInt(debug);
+                } catch (NumberFormatException e) {
+                    if (Boolean.parseBoolean(debug)) {
+                        debuggerTimeout = DEFAULT_DEBUGGER_TIMEOUT;
+                    }
+                }
+            }
+            boolean logOnly = getBooleanArgument(arguments, "log");
+            if (logOnly && arguments.getString("dryRun") == null) {
+                arguments.putString("dryRun", "true");
+            }
+            justCount = getBooleanArgument(arguments, "count");
+            coverage = getBooleanArgument(arguments, "coverage");
+            coverageFilePath = arguments.getString("coverageFile");
         }
         Context context = getContext();
         classLoader = context.getClassLoader();
@@ -86,6 +118,8 @@ public class CucumberInstrumentation extends Instrumentation {
         AndroidObjectFactory objectFactory = new AndroidObjectFactory(delegateObjectFactory, this);
         backends.add(new JavaBackend(objectFactory, classFinder));
         runtime = new Runtime(resourceLoader, classLoader, backends, runtimeOptions);
+        cucumberFeatures = runtimeOptions.cucumberFeatures(resourceLoader);
+        testCount = countScenarios(cucumberFeatures);
 
         start();
     }
@@ -98,16 +132,87 @@ public class CucumberInstrumentation extends Instrumentation {
         }
     }
 
+    @Override
+    public void onStart() {
+        Looper.prepare();
+
+        if (justCount) {
+            results.putString(Instrumentation.REPORT_KEY_IDENTIFIER, REPORT_VALUE_ID);
+            results.putInt(REPORT_KEY_NUM_TOTAL, testCount);
+            finish(Activity.RESULT_OK, results);
+        } else {
+            if (debuggerTimeout != 0) {
+                waitForDebugger(debuggerTimeout);
+            }
+
+            AndroidReporter reporter = new AndroidReporter(testCount);
+            runtimeOptions.getFormatters().clear();
+            runtimeOptions.getFormatters().add(reporter);
+
+            for (CucumberFeature cucumberFeature : cucumberFeatures) {
+                Formatter formatter = runtimeOptions.formatter(classLoader);
+                cucumberFeature.run(formatter, reporter, runtime);
+            }
+            Formatter formatter = runtimeOptions.formatter(classLoader);
+
+            formatter.done();
+            printSummary();
+            formatter.close();
+
+            if (coverage) {
+                generateCoverageReport();
+            }
+
+            finish(Activity.RESULT_OK, results);
+        }
+    }
+
     private boolean getBooleanArgument(Bundle arguments, String tag) {
         String tagString = arguments.getString(tag);
         return tagString != null && Boolean.parseBoolean(tagString);
     }
 
-    @Override
-    public void onStart() {
-        Looper.prepare();
+    /**
+     * Waits the specified time for a debugger to attach.
+     * <p />
+     * For some reason {@link Debug#waitForDebugger()} is not blocking and thinks a debugger is
+     * attached when there isn't.
+     *
+     * @param timeout the time in milliseconds to wait
+     */
+    private void waitForDebugger(int timeout) {
+        System.out.println("waiting " + timeout + "ms for debugger to attach.");
+        long elapsed = 0;
+        while (!Debug.isDebuggerConnected() && elapsed < timeout) {
+            try {
+                System.out.println("waiting for debugger to attach...");
+                Thread.sleep(1000);
+                elapsed += 1000;
+            } catch (InterruptedException ie) {
+            }
+        }
+        if (Debug.isDebuggerConnected()) {
+            System.out.println("waiting for debugger to settle...");
+            try {
+                Thread.sleep(1300);
+            } catch (InterruptedException e) {
+            }
+            System.out.println("debugger connected.");
+        } else {
+            System.out.println("no debugger connected.");
+        }
+    }
 
-        List<CucumberFeature> cucumberFeatures = runtimeOptions.cucumberFeatures(resourceLoader);
+    private void printSummary() {
+        for (Throwable t : runtime.getErrors()) {
+            Log.e(TAG, t.toString());
+        }
+        for (String s : runtime.getSnippets()) {
+            Log.w(TAG, s);
+        }
+    }
+
+    private int countScenarios(List<CucumberFeature> cucumberFeatures) {
         int numScenarios = 0;
 
         // How many individual scenarios (test cases) exist - is there a better way to do this?
@@ -128,30 +233,7 @@ public class CucumberInstrumentation extends Instrumentation {
             }
         }
 
-        AndroidReporter reporter = new AndroidReporter(numScenarios);
-        runtimeOptions.getFormatters().clear();
-        runtimeOptions.getFormatters().add(reporter);
-
-        for (CucumberFeature cucumberFeature : cucumberFeatures) {
-            Formatter formatter = runtimeOptions.formatter(classLoader);
-            cucumberFeature.run(formatter, reporter, runtime);
-        }
-        Formatter formatter = runtimeOptions.formatter(classLoader);
-
-        formatter.done();
-        printSummary();
-        formatter.close();
-
-        finish(Activity.RESULT_OK, new Bundle());
-    }
-
-    private void printSummary() {
-        for (Throwable t : runtime.getErrors()) {
-            Log.e(TAG, t.toString());
-        }
-        for (String s : runtime.getSnippets()) {
-            Log.w(TAG, s);
-        }
+        return numScenarios;
     }
 
     private void appendOption(StringBuilder sb, String optionKey, String optionValue) {
@@ -366,5 +448,59 @@ public class CucumberInstrumentation extends Instrumentation {
                 testResult = null;
             }
         }
+    }
+
+    private void generateCoverageReport() {
+        // use reflection to call emma dump coverage method, to avoid
+        // always statically compiling against emma jar
+        String coverageFilePath = getCoverageFilePath();
+        java.io.File coverageFile = new java.io.File(coverageFilePath);
+        try {
+            Class<?> emmaRTClass = Class.forName("com.vladium.emma.rt.RT");
+            Method dumpCoverageMethod = emmaRTClass.getMethod("dumpCoverageData",
+                    coverageFile.getClass(), boolean.class, boolean.class);
+
+            dumpCoverageMethod.invoke(null, coverageFile, false, false);
+            // output path to generated coverage file so it can be parsed by a test harness if
+            // needed
+            results.putString(REPORT_KEY_COVERAGE_PATH, coverageFilePath);
+            // also output a more user friendly msg
+            final String currentStream = results.getString(
+                    Instrumentation.REPORT_KEY_STREAMRESULT);
+            results.putString(Instrumentation.REPORT_KEY_STREAMRESULT,
+                String.format("%s\nGenerated code coverage data to %s", currentStream,
+                coverageFilePath));
+        } catch (ClassNotFoundException e) {
+            reportEmmaError("Is emma jar on classpath?", e);
+        } catch (SecurityException e) {
+            reportEmmaError(e);
+        } catch (NoSuchMethodException e) {
+            reportEmmaError(e);
+        } catch (IllegalArgumentException e) {
+            reportEmmaError(e);
+        } catch (IllegalAccessException e) {
+            reportEmmaError(e);
+        } catch (InvocationTargetException e) {
+            reportEmmaError(e);
+        }
+    }
+
+    private String getCoverageFilePath() {
+        if (coverageFilePath == null) {
+            return getTargetContext().getFilesDir().getAbsolutePath() + File.separator +
+                   DEFAULT_COVERAGE_FILE_NAME;
+        } else {
+            return coverageFilePath;
+        }
+    }
+
+    private void reportEmmaError(Exception e) {
+        reportEmmaError("", e);
+    }
+
+    private void reportEmmaError(String hint, Exception e) {
+        String msg = "Failed to generate emma coverage. " + hint;
+        Log.e(TAG, msg, e);
+        results.putString(Instrumentation.REPORT_KEY_STREAMRESULT, "\nError: " + msg);
     }
 }

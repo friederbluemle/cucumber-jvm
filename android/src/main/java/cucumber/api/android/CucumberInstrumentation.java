@@ -71,6 +71,10 @@ public class CucumberInstrumentation extends Instrumentation {
                     }
                 }
             }
+            boolean logOnly = getBooleanArgument(arguments, "log");
+            if (logOnly && arguments.getString("dryRun") == null) {
+                arguments.putString("dryRun", "true");
+            }
             justCount = getBooleanArgument(arguments, "count");
             coverage = getBooleanArgument(arguments, "coverage");
             coverageFilePath = arguments.getString("coverageFile");

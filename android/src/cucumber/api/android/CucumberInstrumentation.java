@@ -208,8 +208,6 @@ public class CucumberInstrumentation extends Instrumentation {
                     appendOption(cucumberOptions, "--dotcucumber", arguments.getString(key));
                 } else if ("features".equals(key)) {
                     features = arguments.getString(key);
-                } else {
-                    Log.w(TAG, "Unrecognized option: " + key + "=" + arguments.getString(key));
                 }
             }
             // Even though not strictly required, wait until everything else
